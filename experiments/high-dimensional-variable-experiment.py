@@ -12,7 +12,7 @@ from causallearn.search.PermutationBased.GRaSP import grasp
 from causallearn.utils.cit import chisq
 import pyAgrum as gum
 from algorithms.core.kpc import kPC
-from algorithms.core.cpc import  CPC_modified
+from algorithms.core.cpc import  CPC, heuristic_search
 from algorithms.utils.graph_utils import fscore_calculator_skeleton, fscore_calculator_arrowhead, fscore_calculator_tail, pr_calculator_skeleton, pr_calculator_arrowhead, pr_calculator_tail
 from algorithms.utils.graph_utils import visualize_graph
 from algorithms.utils.graph_utils import create_CPT
@@ -303,7 +303,11 @@ for NO_SAMPLES in sample_sizes:
 
            
             print("CPC started...")
-            D,_ = CPC_modified(data,df, tester, 1, j, num_top_sets, n,[], [], alpha=alpha, cc_set_selection_method='chi-sq')
+            I = heuristic_search(df, cc_set_selection_method = 'chi-sq', cond_set_size_upper_bound=1)
+            #D,_ = CPC_modified(data,df, tester, 1, j, num_top_sets, n,[], [], alpha=alpha, cc_set_selection_method='chi-sq')
+            D,_ = CPC(df,tester,I=I, data_names =df.columns.tolist(),alpha=0.05)
+
+            
             adj = D.graph
             print("f1arrowhead-score of CPC:")
 

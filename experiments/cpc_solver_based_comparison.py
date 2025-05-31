@@ -27,7 +27,7 @@ import pyAgrum as gum
 import pyAgrum.lib.notebook as gnb
 import pyAgrum.lib.image as gumimage
 from algorithms.core.kpc import kPC
-from algorithms.core.cpc import CPC, CPC_modified
+from algorithms.core.cpc import CPC, heuristic_search
 from causallearn.utils.TXT2GeneralGraph import txt2generalgraph
 from algorithms.utils.graph_utils import fscore_calculator_skeleton, fscore_calculator_arrowhead, fscore_calculator_tail
 from algorithms.utils.graph_utils import visualize_graph
@@ -281,7 +281,8 @@ for counter, n in enumerate(num_nodes):
         
         print("CPC started...")
         start_time = time.time()
-        D,_ = CPC_modified(data,df, tester, 1, j, num_top_sets, n,[], [], alpha=alpha, cc_set_selection_method='MV')
+        I = heuristic_search(df, cc_set_selection_method = 'chi-sq', cond_set_size_upper_bound=1)
+        D,_ = CPC(df,tester,I=I, data_names =df.columns.tolist(),alpha=0.05)
         cpc_time = time.time() - start_time
         adj = D.graph
         print("f1arrowhead-score of CPC:")

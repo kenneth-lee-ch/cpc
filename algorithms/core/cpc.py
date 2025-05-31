@@ -228,13 +228,13 @@ def conditional_mutual_information(array, X, Y, Z=None, sample_size=None):
 
 
 
-def compute_cmi_variance(data: np.ndarray, j: int, k: int, q: int, idx_to_skip=[]) -> List[frozenset]:
+def compute_cmi_variance(data: np.ndarray, num_folds: int, k: int, q: int, idx_to_skip=[]) -> List[frozenset]:
     """
     Compute the variance of conditional mutual information across j folds for different conditioning sets.
 
     Args:
     data (np.ndarray): The input data array.
-    j (int): Number of folds to split the data into.
+    num_folds (int): Number of folds to split the data into.
     k (int): Maximum size of the conditioning set Z.
     q (int): Number of top conditioning sets to return.
 
@@ -253,7 +253,7 @@ def compute_cmi_variance(data: np.ndarray, j: int, k: int, q: int, idx_to_skip=[
     cmi_values = defaultdict(list)
     z_variance = defaultdict(list)
     # Create KFold object
-    kf = KFold(n_splits=j, shuffle=True)
+    kf = KFold(n_splits=num_folds, shuffle=True)
 
     # Split data into j folds and compute CMI for each fold
     for train_index, _ in kf.split(data):
@@ -311,6 +311,9 @@ def update_dictionary(d, t, s):
 
 
 def orient(g, nodes, sep_sets, data, alpha, n, independence_test_method, background_knowledge, verbose):
+    """
+    Orient the graph using the FCI orientation and kPC orientation rules
+    """
     node_names = [node.get_name() for node in nodes]
     rule0(graph=g, nodes = nodes, sep_sets=sep_sets, ambiguous_triple = [], knowledge=background_knowledge, verbose=verbose)
     G, edges = FCI_orientations(g, data, sep_sets, nodes, 
@@ -329,13 +332,35 @@ def orient(g, nodes, sep_sets, data, alpha, n, independence_test_method, backgro
 
 
 
+def heuristic_search(df, cc_set_selection_method = 'chi-sq', num_folds=10, cond_set_size_upper_bound=1, num_top_sets=10, idx_to_skip=[]):
+    """ 
+        num_folds: the number of folds to split the data into
+        cond_set_size_upper_bound: the upper bound of the size of the conditioning set
+        num_top_sets: the number of top conditioning sets to return
+        idx_to_skip: the indices of the variables to skip
+    """
+    if cc_set_selection_method == 'MI':
+        # ranking each conditioning set by the variance of the k-fold CMI
+        # this assumes discrete data
+        data = df.to_numpy()
+        Z = compute_cmi_variance(data, num_folds, cond_set_size_upper_bound, num_top_sets, idx_to_skip) 
+    elif cc_set_selection_method == 'samplesize>50':
+        # sample size > 50
+        Z =  find_conditioning_sets_by_sample_size(df, cond_set_size_upper_bound, min_samples=50)
+    else:
+        # chi-sq
+        Z = find_reliable_conditioning_sets_by_contingency(df, cond_set_size_upper_bound, min_cell_count=5)
+    Z = [set()] + Z # add back the empty set
+    return Z
 
-def CPC(data,tester,I,variables_cannot_be_tested=[], data_names =[],alpha=0.05, 
+
+def CPC(df,tester,I,variables_cannot_be_tested=[], data_names =[],alpha=0.05, 
         path_sep_set_enforced=False,
         traverse_subset_and_skip = False,
         k=1,
         background_knowledge: BackgroundKnowledge | None = None,
         verbose=False, **kwargs):
+    data = df.to_numpy()
     n = data.shape[1]
     def is_any_element_in(list1, list2):
         # Convert lists to sets
@@ -378,10 +403,6 @@ def CPC(data,tester,I,variables_cannot_be_tested=[], data_names =[],alpha=0.05,
         nodes.append(node)
         node_to_id_map[node] = i 
 
-    # if data_names:
-    #     # convert I to be id number
-    #     list_of_index_sets = [{strname_id_map[name] for name in name_set} for name_set in I]
-    #     I = list_of_index_sets
 
     # create an empty adjacency sets
     sep_sets: Dict[Tuple[int, int], Set[int]] = {}
@@ -464,122 +485,3 @@ def CPC(data,tester,I,variables_cannot_be_tested=[], data_names =[],alpha=0.05,
     # apply orientation rules in the end if it were not applied at each iteration
     D, new_adj = orient(g, nodes, sep_sets, data, alpha, n, independence_test_method, background_knowledge, verbose)
     return D, new_adj
-
-
-def CPC_modified(data,df, tester, k, j, num_top_sets, n,variables_cannot_be_tested=[], data_names =[],alpha=0.05, 
-        path_sep_set_enforced=False,
-        cc_set_selection_method = 'chi-sq',
-        background_knowledge: BackgroundKnowledge | None = None,
-        verbose=False, **kwargs):
-    
-    def is_any_element_in(list1, list2):
-        # Convert lists to sets
-        set1 = set(list1)
-        set2 = set(list2)
-
-        # Check if there is any common element
-        return not set1.isdisjoint(set2)  # Returns True if there's at least one common element
-
-    def remove_if_exists(causalg:CausalGraph, x: int, y: int) -> None:
-        edge = causalg.G.get_edge(causalg.G.nodes[x], causalg.G.nodes[y])
-        if edge is not None:
-            causalg.G.remove_edge(edge)
-
-    # start from a complete graph
-    if data.shape[0] < data.shape[1]:
-        warnings.warn("The number of features is much larger than the sample size!")
-
-    independence_test_method = CIT(data, method=tester, **kwargs)
-
-    ## ------- check parameters ------------
-    if (background_knowledge is not None) and type(background_knowledge) != BackgroundKnowledge:
-        raise TypeError("'background_knowledge' must be 'BackgroundKnowledge' type!")
-    ## ------- end check parameters ------------
-
-    # create the node variables
-    nodes = []
-    idx_to_skip = []
-    strname_id_map ={}
-    node_to_id_map = {}
-    for i in range(data.shape[1]):
-        if data_names:
-            node = GraphNode(data_names[i])
-            strname_id_map[data_names[i]] = i
-            if data_names[i] in variables_cannot_be_tested:
-                idx_to_skip.append(i)
-        else:
-            node = GraphNode(f"X{i + 1}")
-        node.add_attribute("id", i)
-        nodes.append(node)
-        node_to_id_map[node] = i 
-
-    # create an empty adjacency sets
-    sep_sets: Dict[Tuple[int, int], Set[int]] = {}
-
-    node_names = [node.get_name() for node in nodes]
-    no_of_var = data.shape[1]
-    cg = CausalGraph(no_of_var, node_names)
-    cg.set_ind_test(independence_test_method)
-    # perform marginal CI tests in a fast adjacency search manner
-    var_range = range(no_of_var)
-
-    if cc_set_selection_method == 'MI':
-        Z = compute_cmi_variance(data, j, k, num_top_sets, idx_to_skip) 
-    elif cc_set_selection_method == 'samplesize>50':
-        Z =  find_conditioning_sets_by_sample_size(df, k, min_samples=50)
-    else:
-        Z = find_reliable_conditioning_sets_by_contingency(df, k, min_cell_count=5)
-    Z = [set()] + Z # add back the empty set
-
-    for x in var_range:
-        Neigh_x = cg.neighbors(x)
-        for y in Neigh_x:
-            # looping through subsets
-            if path_sep_set_enforced:
-                node_a = cg.G.nodes[x]
-                node_b = cg.G.nodes[y]
-                
-                # check if every element is in the possibleDsep list
-                possibleDsep = getPossibleDsep(node_a, node_b, cg.G, -1)
-                id_of_possibleDsep = [node_to_id_map[dsepnode] for dsepnode in possibleDsep]
-                # get the nodes along any path between x and y 
-                path_nodes_id = find_all_path_nodes(cg.G.graph, x, y)
-                # get possibleDesep and all nodes along the paths
-                possbleDsepIntersectwithPath_nodes_id = path_nodes_id.intersection(id_of_possibleDsep)
-                # we need at least one member of S to be in this set
-                for sepsets in Z:
-                    if x in sepsets or y in sepsets:
-                        continue
-                    isAtLeastOneElementinPossDsep = is_any_element_in(sepsets, possbleDsepIntersectwithPath_nodes_id)
-                    if isAtLeastOneElementinPossDsep:
-                        p = cg.ci_test(x, y, sepsets)
-                        if p > alpha:
-                            remove_if_exists(cg, x, y)
-                            remove_if_exists(cg, y, x)
-                            append_value(cg.sepset, x, y, tuple(sepsets))
-                            append_value(cg.sepset, y, x, tuple(sepsets))
-                            sep_sets[(x, y)] = sepsets
-                            sep_sets[(y, x)] = sepsets
-                            break
-            else:
-                for sepsets in Z: 
-                    if x in sepsets or y in sepsets:
-                        continue
-                    p = cg.ci_test(x, y, sepsets)
-                    if p > alpha:
-                        remove_if_exists(cg, x, y)
-                        remove_if_exists(cg, y, x)
-                        append_value(cg.sepset, x, y, tuple(sepsets))
-                        append_value(cg.sepset, y, x, tuple(sepsets))
-                        sep_sets[(x, y)] = sepsets
-                        sep_sets[(y, x)] = sepsets
-                        break
-  
-
-    ########### apply FCI and kPC orientations #################
-    g = cg.G 
-    # apply orientation rules in the end if it were not applied at each iteration
-    D, new_adj = orient(g, nodes, sep_sets, data, alpha, n, independence_test_method, background_knowledge, verbose)
-    return D, new_adj
-
-
