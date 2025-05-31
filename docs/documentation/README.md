@@ -1,4 +1,4 @@
-# UAI CPC Code Documentation
+# CPC Code Documentation
 
 ## Overview
 
